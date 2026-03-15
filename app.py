@@ -6,21 +6,25 @@ from docx import Document
 from io import BytesIO
 from fpdf import FPDF
 
-# --- 1. 商业化视觉与核心配置 ---
+# --- 1. 商业化配置 (修正报错) ---
 st.set_page_config(
-    page_title="SafeSign Pro | Enterprise Legal Auditor",
+    page_title="SafeSign Pro | Global Contract Auditor",
     page_icon="⚖️",
     layout="wide"
 )
 
-# 强制统一 UI 风格：深邃、专业
+# 修复后的样式注入
 st.markdown("""
     <style>
-    .main { background-color: #f8f9fa; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #1A1C23; color: white; }
-    .report-box { padding: 20px; border-radius: 10px; border: 1px solid #dee2e6; background-color: white; }
+    .report-box { 
+        padding: 20px; 
+        border-radius: 10px; 
+        border: 1px solid #dee2e6; 
+        background-color: #ffffff;
+        color: #1A1C23;
+    }
     </style>
-    """, unsafe_content_type=True)
+    """, unsafe_allow_html=True) # 这里修正了之前的参数错误
 
 @st.cache_resource
 def init_engine():
@@ -33,86 +37,77 @@ def init_engine():
 
 supabase, ai_client = init_engine()
 
-# --- 2. 全格式解析引擎 ---
+# --- 2. 格式解析 ---
 def extract_text(file):
     try:
         if file.type == "application/pdf":
             with pdfplumber.open(file) as pdf:
                 return "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
         elif file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-            return "\n".join([p.text for p in Document(file).paragraphs])
-        else:
-            return "SUPPORTED_FORMAT_REQUIRED"
+            doc = Document(file)
+            return "\n".join([p.text for p in doc.paragraphs])
+        return ""
     except:
         return ""
 
-# --- 3. 核心功能：双重逻辑生成 (审计 + 范本) ---
-def get_ai_legal_services(content):
-    # 任务 1：深度审计
-    audit_prompt = f"As a corporate lawyer, perform a rigorous risk audit on this contract. Highlight high-risk clauses, missing protections, and unfavorable terms. Contract: {content[:6000]}"
-    
-    # 任务 2：生成标准范本（变量留白）
-    template_prompt = f"Based on the intent of the following text, draft a Professional Standard Agreement Template. IMPORTANT: Leave variables like [PARTY NAME], [EFFECTIVE DATE], [COMPENSATION AMOUNT], and [GOVERNING STATE] blank for the user to fill. Use structured legal formatting. Source: {content[:4000]}"
+# --- 3. AI 逻辑：审计报告 + 留白范本 ---
+def run_legal_engine(content):
+    # 逻辑 1：严谨审计
+    audit_p = f"Professional legal audit of this contract. Identify risks and missing clauses: {content[:5000]}"
+    # 逻辑 2：生成留白范本 (名字、日期、金额全部空出来)
+    template_p = f"Draft a professional standard template based on this contract. Leave variables like [NAME], [DATE], [COMPENSATION] blank for user input: {content[:3000]}"
     
     try:
-        # 并行或串行调用 AI
         audit_res = ai_client.chat.completions.create(
             model="deepseek-chat",
-            messages=[{"role": "user", "content": audit_prompt}]
+            messages=[{"role": "user", "content": audit_p}]
         ).choices[0].message.content
 
         template_res = ai_client.chat.completions.create(
             model="deepseek-chat",
-            messages=[{"role": "user", "content": template_prompt}]
+            messages=[{"role": "user", "content": template_p}]
         ).choices[0].message.content
-        
         return audit_res, template_res
     except Exception as e:
-        return f"Error: {e}", ""
+        return f"AI Error: {e}", ""
 
-# --- 4. 界面与流程设计 ---
+# --- 4. 界面布局 ---
 with st.sidebar:
-    st.image("https://img.icons8.com/ios-filled/100/000000/law.png", width=80)
-    st.title("SafeSign Pro")
-    st.caption("Enterprise-Grade Contract Intelligence")
-    st.markdown("---")
-    email = st.text_input("Client ID / Email:", placeholder="Enter for PRO access")
+    st.title("🛡️ SafeSign Pro")
+    st.caption("Professional Grade Auditor")
+    email = st.text_input("Client Identification (Email):")
     if email:
-        supabase.table("users").upsert({"email": email, "expire_date": "2030-01-01"}).execute()
-        st.success("AUTHENTICATED")
+        try:
+            supabase.table("users").upsert({"email": email, "expire_date": "2030-01-01"}).execute()
+            st.success("AUTHENTICATED")
+        except:
+            st.warning("Database sync offline, but Pro features enabled.")
 
-st.title("⚖️ Contract Audit & Template Generation")
-st.markdown("### Professional analysis for any commercial agreement.")
+st.title("⚖️ SafeSign Pro: Enterprise Legal Intelligence")
+st.markdown("##### Strategic Audit & Standardized Template Generation")
 
-uploaded_file = st.file_uploader("Upload Document (PDF, DOCX)", type=["pdf", "docx"])
+uploaded_file = st.file_uploader("Upload Agreement (PDF or Word)", type=["pdf", "docx"])
 
 if uploaded_file:
-    with st.spinner("Analyzing legal structure..."):
-        text_content = extract_text(uploaded_file)
-        
-        if len(text_content) > 10:
-            audit_report, legal_template = get_ai_legal_services(text_content)
+    with st.spinner("Executing legal analysis..."):
+        raw_text = extract_text(uploaded_file)
+        if len(raw_text) > 20:
+            report, template = run_legal_engine(raw_text)
             
-            # 布局：左边审计报告，右边范本建议
-            col1, col2 = st.columns(2)
-            
-            with col1:
+            # 双栏展示
+            c1, c2 = st.columns(2)
+            with c1:
                 st.subheader("🚩 Risk Audit Report")
-                st.markdown(f"<div class='report-box'>{audit_report}</div>", unsafe_content_type=True)
+                st.markdown(f"<div class='report-box'>{report}</div>", unsafe_allow_html=True)
+            with c2:
+                st.subheader("📄 Standard Template (Variables Blank)")
+                st.markdown(f"<div class='report-box'>{template}</div>", unsafe_allow_html=True)
                 
-            with col2:
-                st.subheader("📄 Standardized Template")
-                st.info("Variables are left as [BLANK] for your customization.")
-                st.markdown(f"<div class='report-box'>{legal_template}</div>", unsafe_content_type=True)
-
             st.markdown("---")
-            
-            # 一键导出功能
             if email:
-                # 这里可以扩展为两个下载按钮，一个下报告，一个下范本
-                st.download_button("📥 Export Comprehensive PDF Bundle", data=audit_report + "\n\n" + legal_template, file_name="SafeSign_Pro_Full_Package.txt")
+                st.download_button("📥 Export Full Documentation", data=f"AUDIT:\n{report}\n\nTEMPLATE:\n{template}", file_name="SafeSign_Pro_Pack.txt")
         else:
-            st.error("Text detection failed. Please upload a clear digital document.")
+            st.error("Document is unreadable. Please upload a digital text-based file.")
 
 st.markdown("---")
-st.caption("© 2026 SafeSign Intelligence. Strictly Confidential.")
+st.caption("© 2026 SafeSign Intelligence. Confidential & Professional.")
