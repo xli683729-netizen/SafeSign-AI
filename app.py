@@ -8,94 +8,112 @@ from fpdf import FPDF
 from docx import Document
 import io
 
-# --- 1. 性能核心：模型缓存（防止 5000 人同时用时内存溢出） ---
+# --- 1. 商用级内存优化：缓存 OCR 模型 ---
+# 这样服务器启动时只加载一次模型，5000人共享，不会重复吃内存
 @st.cache_resource
-def load_ocr_model():
-    # 提前加载模型，常驻内存，避免重复加载导致的严重卡顿
+def get_ocr_reader():
     return easyocr.Reader(['en'])
 
-# --- 2. 页面与 API 初始化 ---
-st.set_page_config(page_title="SafeSign AI Enterprise", layout="wide", page_icon="🛡️")
+# --- 2. 初始化配置 ---
+st.set_page_config(
+    page_title="SafeSign AI Pro - Enterprise",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# 链接 DeepSeek
 client = openai.OpenAI(
     api_key=st.secrets["DEEPSEEK_API_KEY"], 
     base_url="https://api.deepseek.com"
 )
 
-# 使用 SessionState 保证多用户并发时数据互不干扰
-if 'contract_text' not in st.session_state: st.session_state['contract_text'] = ""
+# 使用 SessionState 隔离不同用户的对话内容
+if 'raw_text' not in st.session_state: st.session_state['raw_text'] = ""
 
-# --- 3. 辅助功能 ---
-def export_pdf(text):
+# --- 3. 核心功能函数 ---
+def generate_pdf(text):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
-    # 工业级过滤字符
+    # 工业级过滤字符，防止导出时因特殊符号报错
     safe_text = text.encode('latin-1', 'ignore').decode('latin-1')
     pdf.multi_cell(0, 8, txt=safe_text)
     return pdf.output(dest='S').encode('latin-1')
 
-# --- 4. 主界面 ---
-st.title("🛡️ SafeSign AI Professional (Enterprise)")
-st.caption("High-Performance Legal Audit Engine")
+# --- 4. UI 界面 ---
+st.title("🛡️ SafeSign AI Professional")
+st.subheader("Enterprise-Grade Contract Audit Engine")
 
-# 侧边栏
 with st.sidebar:
     st.header("Settings")
-    mode = st.selectbox("Protocol", ["General", "Influencer", "Employment"])
-    st.success("Server Status: Online")
+    mode = st.selectbox("Industry Protocol", ["General Commercial", "Influencer/Creator", "Employment"])
+    st.markdown("---")
+    st.success("✅ System Secure")
+    st.info("Support: support@safesign.ai")
 
-# 上传区
-uploaded_file = st.file_uploader("Upload Contract", type=['png', 'jpg', 'jpeg', 'pdf', 'docx'])
+# 全格式支持上传
+uploaded_file = st.file_uploader("Upload Contract (PDF, Word, or Photo)", type=['png', 'jpg', 'jpeg', 'pdf', 'docx'])
 
-if st.button("🚀 Start High-Speed Audit"):
+if st.button("🚀 Execute Global Audit", use_container_width=True):
     if uploaded_file:
-        with st.spinner("Processing through AI cluster..."):
+        with st.spinner("AI Cluster is analyzing..."):
             try:
-                reader = load_ocr_model() # 调用缓存的模型
-                text_content = ""
-                
-                # 针对不同格式的高效处理逻辑
+                content = ""
+                # Word 处理
                 if uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
                     doc = Document(uploaded_file)
-                    text_content = "\n".join([p.text for p in doc.paragraphs])
+                    content = "\n".join([p.text for p in doc.paragraphs])
+                # 图片/拍照处理
                 elif uploaded_file.type in ["image/png", "image/jpeg", "image/jpg"]:
+                    reader = get_ocr_reader()
                     img = Image.open(uploaded_file)
                     results = reader.readtext(np.array(img))
-                    text_content = " ".join([res[1] for res in results])
-                elif uploaded_file.type == "application/pdf":
+                    content = " ".join([res[1] for res in results])
+                # PDF 处理
+                else:
                     with pdfplumber.open(uploaded_file) as pdf:
-                        text_content = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
-                
-                st.session_state['contract_text'] = text_content
+                        content = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
 
-                if text_content:
-                    # 降低 Temperature 保证并发时输出的稳定性
+                st.session_state['raw_text'] = content
+
+                if content:
+                    # 5000人并发时，DeepSeek API 调用需要严谨
                     response = client.chat.completions.create(
                         model="deepseek-chat",
-                        messages=[{"role": "user", "content": f"Audit {mode} contract. Score, RedFlags, RevisedText: {text_content}"}],
-                        temperature=0.1 
+                        messages=[{
+                            "role": "system",
+                            "content": f"You are an expert legal auditor for {mode}."
+                        }, {
+                            "role": "user",
+                            "content": f"Audit this contract: Score (0-100), Red Flags, and a full REVISED version. Text: {content}"
+                        }],
+                        temperature=0.1 # 极低随机性，商用更严谨
                     )
-                    audit_res = response.choices[0].message.content
+                    audit_output = response.choices[0].message.content
+                    st.write(audit_output)
                     
-                    st.success("✅ Audit Complete")
-                    st.markdown(audit_res)
-                    
-                    # 导出 PDF
-                    pdf_data = export_pdf(audit_res)
-                    st.download_button("📥 Download Revised Contract", pdf_data, "Report.pdf", "application/pdf")
+                    # 导出按钮
+                    pdf_bytes = generate_pdf(audit_output)
+                    st.download_button(
+                        "📥 Export Corrected Contract (PDF)",
+                        pdf_bytes,
+                        "Revised_SafeSign_Contract.pdf",
+                        "application/pdf",
+                        use_container_width=True
+                    )
             except Exception as e:
-                st.error(f"Engine Busy: {str(e)}")
+                st.error(f"System Busy: Please try again in a moment. ({str(e)})")
     else:
-        st.warning("Please provide a file.")
+        st.warning("Please upload a file to begin.")
 
-# --- 5. 咨询对话框 ---
+# --- 5. 底部对话咨询 ---
 st.divider()
-query = st.text_input("💬 Ask AI anything about this contract:")
-if query and st.session_state['contract_text']:
+st.subheader("💬 Strategic Follow-up")
+user_q = st.text_input("Ask a follow-up question regarding the audit:")
+if user_q and st.session_state['raw_text']:
     with st.spinner("Consulting..."):
         res = client.chat.completions.create(
             model="deepseek-chat",
-            messages=[{"role": "user", "content": f"Context: {st.session_state['contract_text']}\nQ: {query}"}]
+            messages=[{"role": "user", "content": f"Context: {st.session_state['raw_text']}\nQuestion: {user_q}"}]
         )
         st.info(res.choices[0].message.content)
