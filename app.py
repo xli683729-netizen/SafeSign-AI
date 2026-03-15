@@ -3,99 +3,115 @@ import openai
 import pdfplumber
 from docx import Document
 from fpdf import FPDF
-import io
 
-# 1. 商业版高级配置
-st.set_page_config(page_title="SafeSign AI Pro", layout="wide", page_icon="🛡️")
+# 1. US Market Configuration
+st.set_page_config(page_title="SafeSign AI - Professional Contract Audit", layout="wide", page_icon="🛡️")
 
-# 连接 DeepSeek
 try:
     client = openai.OpenAI(
         api_key=st.secrets["DEEPSEEK_API_KEY"], 
         base_url="https://api.deepseek.com"
     )
 except:
-    st.error("🔑 API Key Missing in Streamlit Secrets!")
+    st.error("🔑 Connecting to Secure Cloud...")
     st.stop()
 
-# 状态管理：确保 5000 人并发数据隔离
-if 'raw_text' not in st.session_state: st.session_state['raw_text'] = ""
+# Business Logic State
+if 'usage_count' not in st.session_state: st.session_state['usage_count'] = 0
+if 'is_subscribed' not in st.session_state: st.session_state['is_subscribed'] = False
 if 'audit_res' not in st.session_state: st.session_state['audit_res'] = ""
 
-# 2. 侧边栏
+# 2. Sidebar - Branding & Support (US Style)
 with st.sidebar:
     st.title("🛡️ SafeSign AI")
-    st.subheader("Enterprise V8.0")
-    mode = st.selectbox("Industry Protocol", ["Influencer/Creator", "General Commercial", "Employment"])
-    st.success("High-Performance Mode: ON")
-    st.info("Supported: Word, PDF, Photos")
+    st.markdown("### Professional Legal Compliance")
+    st.divider()
+    
+    if not st.session_state['is_subscribed']:
+        st.warning("Current: Free Trial")
+        st.caption("Limit: 1 Analysis. PDF Download Locked.")
+    else:
+        st.success("Status: PRO Member")
+    
+    st.divider()
+    st.selectbox("Legal Jurisdiction", ["Federal/General Commercial"])
+    
+    st.divider()
+    st.markdown("### 💬 Support & Inquiry")
+    st.info("Need custom audit or help?")
+    st.write("📧 Email: support@yourdomain.com") # 换成你的邮箱
+    st.write("📱 WhatsApp: +1 XXX-XXX-XXXX") # 换成你的号
 
-# 3. 辅助功能：生成正式 PDF
+# 3. PDF Function
 def export_as_pdf(text):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=10)
-    # 过滤特殊字符
     safe_text = text.encode('latin-1', 'ignore').decode('latin-1')
     pdf.multi_cell(0, 8, txt=safe_text)
     return pdf.output(dest='S').encode('latin-1')
 
-# 4. 主界面
-st.title("🛡️ AI Professional Contract Auditor")
-st.markdown("---")
+# 4. Main Interface
+st.title("🛡️ SafeSign AI: Professional Contract Auditor")
+st.caption("AI-powered risk detection for US commercial contracts.")
 
-# 上传组件：支持所有商用格式
-uploaded_file = st.file_uploader("Upload Contract (Word or PDF)", type=['pdf', 'docx'])
+# 4.1 Pricing Table (US Style)
+if not st.session_state['is_subscribed']:
+    with st.expander("💎 Upgrade to Pro (Unlock All Features)", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.info("### Single Scan\n**$9.9 / doc**\n- Full Risk Report\n- Unlock PDF Export")
+        with c2:
+            st.success("### Monthly Pro\n**$49.0 / mo**\n- Unlimited Scans\n- Priority Support")
+        
+        # 支付链接按钮
+        st.link_button("💳 Pay & Activate via Stripe/PayPal", "https://your-payment-link.com")
+        st.caption("After payment, please enter your Activation Code below.")
 
-if st.button("🚀 Execute Full Audit", use_container_width=True):
-    if uploaded_file:
-        with st.spinner("AI Legal Cluster Analyzing..."):
-            try:
-                content = ""
-                # 处理 PDF
-                if uploaded_file.name.endswith('.pdf'):
-                    with pdfplumber.open(uploaded_file) as pdf:
-                        content = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
-                # 处理 Word
-                else:
-                    doc = Document(uploaded_file)
-                    content = "\n".join([p.text for p in doc.paragraphs])
-                
-                st.session_state['raw_text'] = content
+st.divider()
 
-                if content:
-                    # 5000人抗压审计逻辑
-                    prompt = f"Audit this {mode} contract: 1.Risk Score 2.Red Flags 3.Full Revised Contract. Text: {content[:8000]}"
+# 4.2 Upload
+st.markdown("#### Step 1: Upload Document")
+uploaded_file = st.file_uploader("Drop Word (.docx) or PDF file", type=['pdf', 'docx'])
+
+# 4.3 Execution
+if uploaded_file:
+    if st.session_state['usage_count'] >= 1 and not st.session_state['is_subscribed']:
+        st.error("⚠️ Trial limit reached. Please upgrade to PRO to continue.")
+    else:
+        if st.button("🚀 EXECUTE AI AUDIT", use_container_width=True, type="primary"):
+            with st.spinner("Analyzing legal risks..."):
+                try:
+                    content = ""
+                    if uploaded_file.name.endswith('.pdf'):
+                        with pdfplumber.open(uploaded_file) as pdf:
+                            content = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
+                    else:
+                        doc = Document(uploaded_file)
+                        content = "\n".join([p.text for p in doc.paragraphs])
+                    
+                    prompt = f"Act as a US commercial lawyer. Audit this contract: 1.Risk Score (0-100) 2.Top 3 Critical Red Flags 3.Revised Clauses. Text: {content[:6000]}"
                     response = client.chat.completions.create(
                         model="deepseek-chat",
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2
+                        messages=[{"role": "user", "content": prompt}]
                     )
                     st.session_state['audit_res'] = response.choices[0].message.content
-                    
-                    st.success("✅ Audit Complete!")
-                    st.markdown(st.session_state['audit_res'])
-                    
-                    # 蓝色导出按钮
-                    pdf_data = export_as_pdf(st.session_state['audit_res'])
-                    st.download_button("📥 Download Revised Contract (PDF)", pdf_data, "Revised_SafeSign.pdf", "application/pdf", use_container_width=True)
-            except Exception as e:
-                st.error(f"System Busy: {e}")
-    else:
-        st.warning("Please upload a file first.")
+                    st.session_state['usage_count'] += 1
+                    st.rerun()
+                except Exception as e:
+                    st.error("Connection busy. Please try again.")
 
-# 5. 底部：商用级对话框
-st.markdown("---")
-st.subheader("💬 AI Strategic Consultation")
-query = st.text_input("Ask a follow-up question (AI remembers your contract):")
-
-if query:
-    if st.session_state['raw_text']:
-        with st.spinner("Consulting..."):
-            res = client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[{"role": "user", "content": f"Context: {st.session_state['raw_text']}\nQuestion: {query}"}]
-            )
-            st.info(res.choices[0].message.content)
+# 4.4 Results
+if st.session_state['audit_res']:
+    st.success("✅ Audit Report Ready")
+    st.markdown(st.session_state['audit_res'])
+    
+    if st.session_state['is_subscribed']:
+        pdf_data = export_as_pdf(st.session_state['audit_res'])
+        st.download_button("📥 Download Revised Contract (PDF)", pdf_data, "Report.pdf", "application/pdf", use_container_width=True)
     else:
-        st.warning("Please upload a contract first.")
+        st.warning("🔒 PDF Download is locked for trial users. Upgrade to PRO to unlock.")
+
+# 5. Disclaimer (Essential for US Market)
+st.divider()
+st.caption("Disclaimer: SafeSign AI is an AI-powered tool and does not provide formal legal advice. Please consult with a licensed attorney for major legal decisions.")
