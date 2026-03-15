@@ -3,3 +3,4 @@ openai
 pdfplumber
 python-docx
 fpdf
+supabase
