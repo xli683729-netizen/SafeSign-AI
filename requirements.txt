@@ -1,6 +1,5 @@
 streamlit
 openai
-python-docx
 pdfplumber
-Pillow
-fpdf
+easyocr
+opencv-python-headless
