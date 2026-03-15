@@ -3,3 +3,4 @@ openai
 pdfplumber
 easyocr
 opencv-python-headless
+fpdf
