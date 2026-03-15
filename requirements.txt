@@ -1,6 +1,6 @@
 streamlit
 openai
 pdfplumber
+fpdf
 easyocr
 opencv-python-headless
-fpdf
