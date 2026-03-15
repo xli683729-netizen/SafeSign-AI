@@ -109,7 +109,7 @@ with st.sidebar:
     st.caption("中国通用法律合同审计插件")
     st.markdown("---")
     email = st.text_input("会员中心 (输入邮箱登记):", placeholder="yourname@example.com")
-    if email:
+    if True:
         try:
             supabase.table("users").upsert({"email": email, "expire_date": "2030-01-01"}).execute()
             st.success("✅ 授权成功：专业版已激活")
