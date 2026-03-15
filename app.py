@@ -8,10 +8,14 @@ from io import BytesIO
 # --- 1. 商业化配置 ---
 st.set_page_config(page_title="SafeSign Pro", page_icon="⚖️", layout="wide")
 
+# 注入 CSS 确保双栏高度一致，视觉专业
 st.markdown("""
     <style>
-    .report-box { padding: 15px; border-radius: 8px; border: 1px solid #eee; background-color: #f9f9f9; color: #333; }
-    .stChatInputContainer { padding-bottom: 20px; }
+    .report-card { 
+        padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; 
+        background-color: #ffffff; height: 600px; overflow-y: auto; 
+    }
+    .stChatInputContainer { padding-bottom: 30px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -26,97 +30,104 @@ def init_engine():
 
 supabase, ai_client = init_engine()
 
-# --- 2. 极速解析逻辑 (优化 PDF 读取速度) ---
-def fast_extract(file):
+# --- 2. 增强解析逻辑 ---
+def extract_content(file):
     try:
         if file.type == "application/pdf":
             with pdfplumber.open(file) as pdf:
-                # 仅取前 10 页进行快速审计，避免超长文件拖慢速度
-                pages = pdf.pages[:10] 
-                return "\n".join([p.extract_text() for p in pages if p.extract_text()])
+                # 仅解析前15页，确保响应速度在1分钟内
+                return "\n".join([p.extract_text() for p in pdf.pages[:15] if p.extract_text()])
         elif file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             return "\n".join([p.text for p in Document(file).paragraphs])
         return ""
     except Exception as e:
-        return f"Error: {e}"
+        return f"解析失败: {e}"
 
-# --- 3. Word 生成器 ---
-def make_docx(audit, tmpl):
+# --- 3. Word 导出引擎 ---
+def export_docx(audit, template):
     doc = Document()
-    doc.add_heading('SafeSign Pro 审计方案', 0)
-    doc.add_heading('风险审计', level=1); doc.add_paragraph(audit)
-    doc.add_heading('标准范本', level=1); doc.add_paragraph(tmpl)
+    doc.add_heading('SafeSign Pro 合同审计方案', 0)
+    doc.add_heading('一、法律风险审计报告', level=1); doc.add_paragraph(audit)
+    doc.add_heading('二、标准合同范本(留白版)', level=1); doc.add_paragraph(template)
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
 
-# --- 4. 界面布局 ---
+# --- 4. 侧边栏：会员中心 ---
 with st.sidebar:
     st.title("🛡️ SafeSign Pro")
-    email = st.text_input("登记邮箱解锁下载:")
+    st.caption("中国通用法律合同审计插件")
+    email = st.text_input("登记邮箱（解锁下载）:", placeholder="example@mail.com")
     if email:
         try: supabase.table("users").upsert({"email": email}).execute()
         except: pass
-    st.info("模式：中国法律专业版")
+    st.markdown("---")
+    st.info("当前环境：中国民法典标准")
 
-st.title("⚖️ 合同智能审计与范本生成")
+# --- 5. 主界面布局 ---
+st.title("⚖️ 企业级合同智能审计引擎")
 
-# 强制显示对话框（即使还没上传文件，也可以先咨询）
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-# 显示聊天历史
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-uploaded_file = st.file_uploader("上传合同 (PDF/Word)", type=["pdf", "docx"])
+uploaded_file = st.file_uploader("上传待审核合同 (PDF/Word)", type=["pdf", "docx"])
 
 if uploaded_file:
-    # 检查是否已经分析过，避免重复分析
-    if "audit_result" not in st.session_state:
-        with st.spinner("正在极速扫描条款..."):
-            content = fast_extract(uploaded_file)
-            if len(content) > 10:
-                # 提示词优化，要求 AI 简明扼要，加快生成速度
-                p = f"你是中国律师，请极简审计此合同风险并提供留白范本: {content[:4000]}"
-                res = ai_client.chat.completions.create(
+    if "final_report" not in st.session_state:
+        with st.spinner("正在依照中国法律深度扫描条款..."):
+            text = extract_content(uploaded_file)
+            if len(text) > 10:
+                # 提示词要求 AI 严格按两部分输出
+                prompt = f"你是一名资深中国律师。请先对以下合同进行风险审计，然后提供一份变量留白的标准范本。要求专业、地道、严谨。合同内容：{text[:4500]}"
+                full_res = ai_client.chat.completions.create(
                     model="deepseek-chat",
-                    messages=[{"role": "user", "content": p}]
+                    messages=[{"role": "user", "content": prompt}]
                 ).choices[0].message.content
-                st.session_state.audit_result = res
-            else:
-                st.error("文件内容无法识别")
+                
+                # 简单拆分结果（实际商用建议 AI 分两次返回或用分隔符）
+                parts = full_res.split("范本")
+                st.session_state.audit_part = parts[0]
+                st.session_state.tmpl_part = "范本" + parts[1] if len(parts) > 1 else "请咨询律师获取详细范本"
+                st.session_state.final_report = full_res
 
-    # 显示结果
-    if "audit_result" in st.session_state:
-        st.subheader("📋 审计与范本建议")
-        st.markdown(f"<div class='report-box'>{st.session_state.audit_result}</div>", unsafe_allow_html=True)
+    # --- 核心：左右对称布局 ---
+    if "final_report" in st.session_state:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("🚩 风险审计报告")
+            st.markdown(f"<div class='report-card'>{st.session_state.audit_part}</div>", unsafe_allow_html=True)
         
-        # 强制显示下载按钮
+        with col2:
+            st.subheader("📄 标准范本建议")
+            st.markdown(f"<div class='report-card'>{st.session_state.tmpl_part}</div>", unsafe_allow_html=True)
+        
+        # 下载区域
         st.markdown("---")
-        word_data = make_docx(st.session_state.audit_result, "请参考上方范本内容")
+        doc_bytes = export_docx(st.session_state.audit_part, st.session_state.tmpl_part)
         st.download_button(
-            label="📥 下载 Word 专业版方案",
-            data=word_data,
-            file_name=f"SafeSign_Audit_{uploaded_file.name}.docx",
+            label="📥 下载专业版 Word 方案（含审计+范本）",
+            data=doc_bytes,
+            file_name=f"SafeSign审计方案_{uploaded_file.name}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
 
-# --- 对话框逻辑 (放在最底部，确保始终可见) ---
-st.markdown("---")
-if prompt := st.chat_input("针对合同内容，您可以进一步追问律师..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+# --- 6. 底部固定对话框 ---
+st.markdown("### 💬 法律顾问咨询")
+for msg in st.session_state.chat_history:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+if chat_prompt := st.chat_input("您可以针对审计结果进一步追问..."):
+    st.session_state.chat_history.append({"role": "user", "content": chat_prompt})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(chat_prompt)
     
     with st.chat_message("assistant"):
-        # 实时咨询逻辑
-        context = st.session_state.audit_result if "audit_result" in st.session_state else "通用法律咨询"
-        response = ai_client.chat.completions.create(
+        context = st.session_state.get("final_report", "通用法律咨询")
+        ans = ai_client.chat.completions.create(
             model="deepseek-chat",
-            messages=[{"role": "system", "content": f"基于此背景回答: {context}"},
-                      {"role": "user", "content": prompt}]
+            messages=[{"role": "system", "content": f"基于此合同背景回答: {context}"},
+                      {"role": "user", "content": chat_prompt}]
         ).choices[0].message.content
-        st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.markdown(ans)
+        st.session_state.chat_history.append({"role": "assistant", "content": ans})
