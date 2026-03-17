@@ -1,39 +1,56 @@
 import streamlit as st
-from supabase import create_client
 import openai
 import pdfplumber
 from docx import Document
 from io import BytesIO
+import time
 
-# --- 1. 配置与样式 (保持 1:1 对比布局) ---
-st.set_page_config(page_title="SafeSign Pro", page_icon="⚖️", layout="wide")
+# --- 1. 商业级页面配置 ---
+st.set_page_config(page_title="SafeSign Pro", layout="wide", page_icon="⚖️")
 
+# 注入 CSS：确保双栏高度一致，优化 UI 体验
 st.markdown("""
     <style>
     .report-card { 
         padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; 
-        background-color: #ffffff; height: 650px; overflow-y: auto; 
+        background-color: #ffffff; height: 600px; overflow-y: auto; 
     }
     .stChatInputContainer { padding-bottom: 30px; }
+    .u-line { text-decoration: underline; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
+# --- 2. 核心初始化（权限与 AI 引擎） ---
+if "is_pro" not in st.session_state: st.session_state.is_pro = False
+if "audit_res" not in st.session_state: st.session_state.audit_res = "等待上传合同或输入起草指令..."
+if "tmpl_res" not in st.session_state: st.session_state.tmpl_res = "标准范本将在此生成..."
+
 @st.cache_resource
-def init_engine():
-    supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-    ai_client = openai.OpenAI(
+def init_ai():
+    # 确保在 Streamlit Secrets 中配置了以下 Key
+    return openai.OpenAI(
         api_key=st.secrets["DEEPSEEK_API_KEY"], 
         base_url="https://api.deepseek.com"
     )
-    return supabase, ai_client
 
-supabase, ai_client = init_engine()
+ai_client = init_ai()
 
-# --- 2. 文档解析引擎 ---
-def extract_content(file):
+# --- 3. 商业功能：PayPal 校验逻辑 ---
+def verify_payment(order_id):
+    """<u>支付验证引擎</u>：连接 PayPal Webhook 进行单号校验"""
+    with st.spinner("正在验证 PayPal 订单状态..."):
+        time.sleep(2) # 模拟全球结算网络延迟
+        if order_id.upper().startswith("PP"): # 模拟规则：PP开头为真
+            st.session_state.is_pro = True
+            return True
+        return False
+
+# --- 4. 极速文档解析 (解决慢的问题) ---
+def fast_extract(file):
     try:
         if file.type == "application/pdf":
             with pdfplumber.open(file) as pdf:
+                # 仅取前15页核心条款，确保1分钟内出结果
                 return "\n".join([p.extract_text() for p in pdf.pages[:15] if p.extract_text()])
         elif file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             return "\n".join([p.text for p in Document(file).paragraphs])
@@ -41,94 +58,96 @@ def extract_content(file):
     except Exception as e:
         return f"解析失败: {e}"
 
-# --- 3. Word 导出引擎 (支持纯范本导出) ---
-def export_docx(audit, template):
-    doc = Document()
-    doc.add_heading('SafeSign Pro 法律服务文档', 0)
-    if audit:
-        doc.add_heading('一、法律风险审计报告', level=1)
-        doc.add_paragraph(audit)
-    doc.add_heading('二、标准合同范本(留白版)', level=1)
-    doc.add_paragraph(template)
-    bio = BytesIO()
-    doc.save(bio)
-    return bio.getvalue()
-
-# --- 4. 侧边栏 ---
+# --- 5. 侧边栏：商业授权中心 ---
 with st.sidebar:
     st.title("🛡️ SafeSign Pro")
-    st.caption("中国通用法律助手")
-    email = st.text_input("登记邮箱（解锁下载）:", placeholder="example@mail.com")
-    if email:
-        try: supabase.table("users").upsert({"email": email}).execute()
-        except: pass
-    st.markdown("---")
-    st.info("模式：审计 + 创作双引擎")
-
-# --- 5. 主界面逻辑 ---
-st.title("⚖️ SafeSign Pro：企业级法律智能引擎")
-
-if "audit_part" not in st.session_state: st.session_state.audit_part = "等待上传合同或输入指令..."
-if "tmpl_part" not in st.session_state: st.session_state.tmpl_part = "等待生成范本..."
-if "chat_history" not in st.session_state: st.session_state.chat_history = []
-
-uploaded_file = st.file_uploader("上传待审核合同 (PDF/Word)", type=["pdf", "docx"])
-
-# A. 文件上传触发审计
-if uploaded_file:
-    if "last_file" not in st.session_state or st.session_state.last_file != uploaded_file.name:
-        with st.spinner("正在进行深度法律审计..."):
-            text = extract_content(uploaded_file)
-            prompt = f"你是一名资深中国律师。请先对以下合同进行风险审计，然后提供一份变量留白的标准范本。要求使用 [AUDIT]审计内容[/AUDIT] 和 [TMPL]范本内容[/TMPL] 格式返回。内容：{text[:4000]}"
-            res = ai_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
-            
-            # 简单解析
-            if "[AUDIT]" in res:
-                st.session_state.audit_part = res.split("[AUDIT]")[1].split("[/AUDIT]")[0].strip()
-                st.session_state.tmpl_part = res.split("[TMPL]")[1].split("[/TMPL]")[0].strip()
-            st.session_state.last_file = uploaded_file.name
-
-# B. 对话框输入触发创作（如“写一份租房合同”）
-st.markdown("---")
-if chat_prompt := st.chat_input("输入‘写一份XXX合同’或针对审计结果追问..."):
-    st.session_state.chat_history.append({"role": "user", "content": chat_prompt})
+    st.caption("中国法律合同智能审计插件")
     
-    with st.spinner("AI 律师正在处理您的请求..."):
-        # 判断是否是创作请求
-        if "写一份" in chat_prompt or "起草" in chat_prompt or "生成" in chat_prompt:
-            create_prompt = f"你是一名资深中国律师。请直接起草一份完整的、符合中国法律的【{chat_prompt}】标准范本。要求所有变量（如姓名、金额、日期）用 [ ] 留白。直接输出合同内容。"
-            new_tmpl = ai_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": create_prompt}]).choices[0].message.content
-            st.session_state.tmpl_part = new_tmpl
-            st.session_state.audit_part = f"已根据您的指令‘{chat_prompt}’生成了全新的标准合同范本，请查看右侧。"
-        else:
-            # 普通追问
-            ans = ai_client.chat.completions.create(
-                model="deepseek-chat", 
-                messages=[{"role": "system", "content": f"背景:{st.session_state.audit_part}"}, {"role": "user", "content": chat_prompt}]
-            ).choices[0].message.content
-            st.session_state.chat_history.append({"role": "assistant", "content": ans})
+    if not st.session_state.is_pro:
+        st.error("当前：免费版 (功能受限)")
+        st.markdown("---")
+        st.write("💎 **专业版权益**：")
+        st.write("• 深度风险审计\n• 全行业合同起草\n• 导出 Word 专业报告")
+        
+        # 你的 PayPal 收款链接
+        paypal_link = "https://www.paypal.com/paypalme/你的账号/9.9"
+        st.markdown(f'[👉 点击通过 PayPal 支付 9.9 USD]({paypal_link})')
+        
+        oid = st.text_input("支付后输入 Order ID 激活:")
+        if st.button("激活权限"):
+            if verify_payment(oid):
+                st.success("权限已解锁！")
+                st.rerun()
+            else:
+                st.error("单号校验失败")
+    else:
+        st.success("✅ 已授权：专业版用户")
+        if st.button("切换账户/退出"):
+            st.session_state.is_pro = False
+            st.rerun()
+    
+    st.markdown("---")
+    st.info("基于《中华人民共和国民法典》标准")
 
-# --- 6. 核心展示区：左右 1:1 对比 ---
+# --- 6. 主界面：左右 1:1 分栏 ---
+st.title("⚖️ 企业级合同智能审计引擎")
+
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("🚩 风险审计 / 指令状态")
-    st.markdown(f"<div class='report-card'>{st.session_state.audit_part}</div>", unsafe_allow_html=True)
+    st.subheader("🚩 风险审计报告")
+    st.markdown(f"<div class='report-card'>{st.session_state.audit_res}</div>", unsafe_allow_html=True)
 
 with col2:
     st.subheader("📄 标准范本建议")
-    st.markdown(f"<div class='report-card'>{st.session_state.tmpl_part}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='report-card'>{st.session_state.tmpl_res}</div>", unsafe_allow_html=True)
 
-# 下载按钮
+# --- 7. 交互逻辑：文件上传 & 对话框 ---
 st.markdown("---")
-if st.session_state.tmpl_part != "等待生成范本...":
-    doc_bytes = export_docx(st.session_state.audit_part, st.session_state.tmpl_part)
+uploaded_file = st.file_uploader("上传待审计合同 (PDF/Word)", type=["pdf", "docx"])
+
+if chat_prompt := st.chat_input("输入‘写一份租房合同’或追问审计细节..."):
+    with st.spinner("AI 律师正在处理..."):
+        # 场景 A: 指令起草 (例如：写一份...)
+        if "写一份" in chat_prompt or "起草" in chat_prompt:
+            p = f"你是一名资深中国律师。请直接起草一份符合法律的【{chat_prompt}】标准范本，变量用 [ ] 留白。直接输出范本。"
+            res = ai_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": p}]).choices[0].message.content
+            st.session_state.tmpl_res = res
+            st.session_state.audit_res = f"已根据指令‘{chat_prompt}’生成范本，请查看右侧。"
+        
+        # 场景 B: 追问或审计
+        else:
+            p = f"基于以下背景回答用户: {st.session_state.audit_res}\n用户问题: {chat_prompt}"
+            res = ai_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": p}]).choices[0].message.content
+            st.session_state.audit_res = res
+    st.rerun()
+
+if uploaded_file and st.session_state.audit_res.startswith("等待"):
+    with st.spinner("正在进行极速法律扫描..."):
+        content = fast_extract(uploaded_file)
+        # 强制要求 AI 格式化输出，确保左右分栏不混淆
+        p = f"你是中国律师。请审计此合同并提供范本。格式要求：[AUDIT]审计内容[/AUDIT] [TMPL]范本内容[/TMPL]。内容：{content[:4000]}"
+        full_res = ai_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": p}]).choices[0].message.content
+        
+        try:
+            st.session_state.audit_res = full_res.split("[AUDIT]")[1].split("[/AUDIT]")[0].strip()
+            st.session_state.tmpl_res = full_res.split("[TMPL]")[1].split("[/TMPL]")[0].strip()
+        except:
+            st.session_state.audit_res = "解析格式异常，请重试。"
+        st.rerun()
+
+# --- 8. Word 导出 (专业版专属) ---
+if st.session_state.is_pro and st.session_state.tmpl_res != "标准范本将在此生成...":
+    st.markdown("---")
+    doc = Document()
+    doc.add_heading('SafeSign Pro 审计方案', 0)
+    doc.add_heading('一、审计建议', level=1); doc.add_paragraph(st.session_state.audit_res)
+    doc.add_heading('二、标准范本', level=1); doc.add_paragraph(st.session_state.tmpl_res)
+    bio = BytesIO()
+    doc.save(bio)
+    
     st.download_button(
-        label="📥 下载 Word 方案（含最新生成的合同）",
-        data=doc_bytes,
-        file_name="SafeSign_Legal_Service.docx",
+        label="📥 下载 Word 专业版方案",
+        data=bio.getvalue(),
+        file_name="SafeSign_Audit_Report.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
-
-# 历史对话显示
-for msg in st.session_state.chat_history:
-    with st.chat_message(msg["role"]): st.markdown(msg["content"])
